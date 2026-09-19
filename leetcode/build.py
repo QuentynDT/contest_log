@@ -1,105 +1,158 @@
 import os
 import re
-def write(code, number, date):
-    folder_path = os.path.join(date)
-    file_path = os.path.join(folder_path, number + '.cpp')
-    os.makedirs(folder_path, exist_ok=True)
-    with open(file_path, 'w') as f:
+import sys
+
+def write_file(code: str, file_path: str) -> None:
+    os.makedirs(os.path.dirname(file_path), exist_ok=True)
+    with open(file_path, 'w', encoding='utf-8') as f:
         f.write(code)
+    print(f"Successfully generated: {file_path}")
+
+def parse_signature(raw_code: str):
+    # Strip C++ comments
+    cleaned = re.sub(r'//.*?\n', '', raw_code)
+    cleaned = re.sub(r'/\*.*?\*/', '', cleaned, flags=re.DOTALL)
+
+    # Strip access specifiers (public:, private:, protected:)
+    cleaned_no_access = re.sub(r'\b(public|private|protected)\s*:', '', cleaned)
+
+    # Match function definition anywhere in the snippet
+    match = re.search(r'([\w:<>\s*&]+)\s+([a-zA-Z_]\w*)\s*\(([^)]*)\)', cleaned_no_access)
+    if not match:
+        raise ValueError("Could not parse a valid C++ function signature from input.")
+
+    ret_type = match.group(1).strip()
+    func_name = match.group(2).strip()
+    params_str = match.group(3).strip()
+
+    params = []
+    if params_str:
+        raw_params = []
+        depth = 0
+        current = []
+        for char in params_str:
+            if char == '<':
+                depth += 1
+            elif char == '>':
+                depth -= 1
+            if char == ',' and depth == 0:
+                raw_params.append(''.join(current).strip())
+                current = []
+            else:
+                current.append(char)
+        if current:
+            raw_params.append(''.join(current).strip())
+
+        for p in raw_params:
+            p_match = re.search(r'^(.*?)\s*([a-zA-Z_]\w*)$', p)
+            if p_match:
+                p_type = p_match.group(1).strip()
+                p_name = p_match.group(2).strip()
+                params.append((p_type, p_name))
+
+    # Filter out duplicate struct definitions if pasted from LeetCode
+    filtered_lines = []
+    skip = False
+    for line in raw_code.splitlines():
+        if re.search(r'struct\s+(TreeNode|ListNode)\s*\{', line):
+            skip = True
+        if not skip:
+            filtered_lines.append(line)
+        if skip and line.strip() == "};":
+            skip = False
+
+    return ret_type, func_name, params, "\n".join(filtered_lines)
+
+def clean_type_for_struct(type_str: str) -> str:
+    clean = re.sub(r'\b(const|public|private|protected)\b', '', type_str)
+    clean = clean.replace(':', '').replace('&', '').strip()
+    return clean
 
 def build_code():
-    itypes = []
-    inames = []
+    q_num = input("Enter q number:\n").strip()
+    if not q_num.startswith('q'):
+        q_num = 'q' + q_num
+
+    date_folder = input("Enter date:\n").strip()
+    target_path = os.path.join(date_folder, f"{q_num}.cpp")
+
+    # Guard: check if file already exists
+    if os.path.exists(target_path):
+        print(f"File '{target_path}' already exists! Aborting.")
+        sys.exit(0)
+
+    print("Enter leetcode starter function (end input with '};' on a new line):")
     lines = []
-    sentence = ""
-    count = 0
-    number = "q" + input("Enter q number.\n")
-    date = input("Enter date.\n")
-    cases = "1"
-    print("Enter leetcode starter function.")
     while True:
-        count += 1
         line = input()
-        lines.append(line + '\n')
-        if count == 3:
-            sentence = line
-        if line == "};":
+        lines.append(line)
+        if line.strip() == "};":
             break
-    pre = re.findall(r'[^\s,()]+', sentence)
-    words = []
-    for word in pre:
-        if words and words[-1] == "long" and word == "long":
-            words[-1] = "long long"
-        else:
-            words.append(word)
-    is_void = words[0] == "void"
+
+    raw_input = "\n".join(lines)
+    ret_type, func_name, params, cleaned_leetcode_code = parse_signature(raw_input)
+
+    is_void = (ret_type == "void")
+    result_type = clean_type_for_struct(params[0][0]) if is_void and params else clean_type_for_struct(ret_type)
+
+    struct_fields = []
+    arg_names = []
+    for p_type, p_name in params:
+        st_type = clean_type_for_struct(p_type)
+        struct_fields.append(f"    {st_type} {p_name};")
+        arg_names.append(f"data.{p_name}")
+
+    struct_fields.append(f"    {result_type} ans;")
+    struct_fields.append(f"    {result_type} res;")
+    struct_body = "\n".join(struct_fields)
+
+    args_str = ", ".join(arg_names)
+    solve_call = f"s.{func_name}({args_str});"
+
     if is_void:
-        words[0] = words[2]
-        if words[0].endswith('&'):
-            words[0] = words[0][:-1]
-    for index, word in enumerate(words):
-        if index < 2:
-            continue
-        if index % 2 == 0:
-            if word == "{":
-                break
-            itypes.append(word)
-        else:
-            inames.append(word)
-    outstring = words[0]
-    t = int(cases)
-    struct = ""
-    inline = ""
-    var = ""
-    inits = "\n    const int n = " + cases + ";\n    vector<token> tokens;"
-    for var, vname in zip(itypes, inames):
-        struct += "\n    " + var
-        if var.endswith('&'):
-            struct = struct[:-1]
-        struct += " " + vname + ";"
-        inline += "data." + vname + ", "
-    for i in range(t):
-        inits += "\n    tokens.push_back({});"
-    struct += "\n    " + words[0] + " ans;\n    " + words[0] + " res;\n"
-    inline = inline[:-2]
-    solve = """s.""" + words[1] + """(""" + inline + """);"""
-    handle = """void handle(token& data){\n    Solution s;\n"""
-    if is_void:
-        handle += """    """ + solve + """\n    """ + """data.res = data.""" + inames[0] + """;\n}"""
+        first_param_name = params[0][1] if params else "data"
+        handle_body = f"    {solve_call}\n    data.res = data.{first_param_name};"
     else:
-        handle += """    data.res = """ + solve + """\n}"""
+        handle_body = f"    data.res = {solve_call}"
 
+    cpp_template = f"""#include "../timer.h"
 
-    code = """
-#include "../timer.h"
+{cleaned_leetcode_code}
 
-""" + "".join(lines) + """
-struct token {""" + struct + """};
+struct token {{
+{struct_body}
+}};
 
-""" + handle + """
+void handle(token& data) {{
+    Solution s;
+{handle_body}
+}}
 
-void runTests(vector<token>& tokens){
+void runTests(vector<token>& tokens) {{
     cout << '\\n';
-    for(token& t : tokens){
+    for(token& t : tokens) {{
         handle(t);
-        cout << "Output: ";
+        cout << "Output:   ";
         display(t.res);
         cout << "\\nExpected: ";
         display(t.ans);
         cout << "\\n\\n";
-    }
-}
+    }}
+}}
 
-int main(){""" + inits + """
+int main() {{
+    const int n = 1;
+    vector<token> tokens;
+    tokens.push_back({{}});
+
     auto start = high_resolution_clock::now();
     runTests(tokens);
     auto end = high_resolution_clock::now();
+
     showRunTime(start, end);
-}
+}}
 """
-    code = code.strip()
-    #print(code)
-    write(code, number, date)
+    write_file(cpp_template.strip(), target_path)
 
 if __name__ == "__main__":
     build_code()
