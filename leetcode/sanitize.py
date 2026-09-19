@@ -97,8 +97,8 @@ def replace_in_cpp_file():
 
         print(f"Successfully updated {target_path}")
 
-    except Exception as e:
-        print(f"An unexpected error occurred: {e}")
+    except OSError as e:
+        print(f"File operation failed: {e}")
 
 if __name__ == "__main__":
     replace_in_cpp_file()
